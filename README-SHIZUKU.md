@@ -17,8 +17,7 @@
 
 ```
 patches/
-  0001-application-id.patch       只改包名（1 行）
-  0002-shizuku-installer.patch    安装实现 + 两个钩子 + manifest + 依赖
+  0001-shizuku-installer.patch    包名 + 安装实现 + 两个钩子 + manifest + 依赖
 scripts/
   apply-patches.sh                应用补丁（CI 与本地都用它）
   inject-version.sh               注入 versionCode/versionName（时间戳，单调）
@@ -123,8 +122,7 @@ git switch -c dev/shizuku origin/master
 bash scripts/apply-patches.sh          # 会失败并留下 .rej / 冲突标记
 # 手动解决，保证编译通过
 git add -A && git commit -m "rebase patches onto $(git rev-parse --short origin/master)"
-git diff origin/master..HEAD -- app/build.gradle.kts > patches/0001-application-id.patch
-git diff origin/master..HEAD -- app/src gradle/verification-metadata.xml > patches/0002-shizuku-installer.patch
+git diff origin/master..HEAD -- app gradle > patches/0001-shizuku-installer.patch
 git switch master && git add patches && git commit -m "update patches"
 ```
 

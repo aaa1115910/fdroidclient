@@ -4,6 +4,14 @@
 > 源码改动尽量小、与上游随时同步；GitHub Actions 自动同步上游 → 自动构建 → 自动发布 →
 > 自带一个可自更新的软件源。
 >
+> **实现状态（已落地）**：仓库骨架、补丁集、CI 工作流与脚本均已提交到 `master`，并在本地完成
+> 编译、签名与索引生成的验证。与下文方案的几处差异（均为简化）：
+> - 源码补丁合并为 1 个：`patches/0001-shizuku-installer.patch`。
+> - 自建源条目不在补丁里，改为构建时由 `scripts/inject-repo.sh` 注入（仓库地址与证书属于部署参数）。
+> - 产物输出到 `build/dist/`（`build/` 已被上游 .gitignore 忽略，避免误提交）。
+> - 新增依赖需要过 Gradle 依赖校验，补丁里加入 `<trust group="dev.rikka.shizuku"/>`。
+> - 本地验证命令见 `README-SHIZUKU.md`。
+
 > 基线：本仓库当前提交 `9dd8b2f94`（上游 master），版本 `2.0.3 (versionCode 2000053)`，
 > Kotlin 2.4.21 / AGP 9.4.1 / Gradle 9.8.0 / compileSdk 37 / minSdk 24。
 
@@ -14,8 +22,8 @@
 | 决策点 | 选择 | 理由 |
 | --- | --- | --- |
 | 改动方式 | **补丁集（patch series）+ `git apply`**，源码改动不进 git 历史 | 上游 `master` 只有「新增文件」，git 层面几乎不可能冲突 |
-| 改动规模 | 现有文件 **4 处共 ~15 行**，新增 3 个 Kotlin 文件（~350 行） | 钩子都落在唯一的安装汇聚点 |
-| 安装机制 | **Shizuku UserService（shell uid）+ `cmd package install -S`** | 不依赖隐藏 API、不依赖 Android 版本细节、代码量最小 |
+| 改动规模 | 现有文件 **5 处共 ~28 行**，新增 2 个 Kotlin 文件（~330 行） | 钩子都落在唯一的安装汇聚点 |
+| 安装机制 | **Shizuku UserService（shell uid）+ `cmd package install`**（先把 APK 暂存到 `/data/local/tmp`） | 不依赖隐藏 API、不依赖 Android 版本细节、代码量最小 |
 | 包名 | `org.fdroid.fdroid.shizuku`（`full` flavor 后缀改为 `.fdroid.shizuku`） | 与官方 F-Droid 共存，避免签名冲突与仓库条目打架 |
 | 版本号 | `versionCode = 当前时间戳/60`（上游 nightly 同款做法），`versionName = <上游>−shizuku` | 无状态、单调递增、不会回退 |
 | 自更新源 | `fdroidserver` 生成 index-v2 → 推 `gh-pages` → 客户端 `default_repos.json` 预置该源并内置证书 | 一条命令生成合规索引（index-v2 + entry.json 签名） |
