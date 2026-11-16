@@ -92,7 +92,7 @@ Set them on your fork with:
   gh variable set REPO_CERT_HEX         --body "\$REPO_CERT_HEX"
 
 Repository certificate (hex DER), for reference:
-  \$REPO_CERT_HEX
+  $REPO_CERT_HEX
 
 Local build with the real keys (optional):
 
