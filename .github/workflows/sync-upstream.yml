@@ -1,0 +1,78 @@
+name: sync-upstream
+
+# Keeps this fork up to date with https://gitlab.com/fdroid/fdroidclient.
+#
+# `master` only ever *adds* files on top of upstream (patches/, scripts/, .github/, metadata/),
+# the source changes live in patches/. That is why this merge is practically conflict free:
+# upstream never touches the paths we added.
+
+on:
+  schedule:
+    # daily, 03:17 Asia/Shanghai (19:17 UTC), off the full hour to be nice to GitLab
+    - cron: '17 19 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Merge upstream master
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name 'fdroid-shizuku-bot'
+          git config user.email 'bot@users.noreply.github.com'
+          git remote add upstream https://gitlab.com/fdroid/fdroidclient.git 2>/dev/null || true
+          git fetch --no-tags --prune upstream master
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo 'Upstream is already merged, nothing to do.'
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Merging $(git rev-parse --short FETCH_HEAD) ..."
+          git merge --no-edit FETCH_HEAD
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$(git rev-parse --short FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Push to master
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin HEAD:master
+
+      - name: Open issue when the merge fails
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().slice(0, 10);
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `上游同步失败 ${date}`,
+              labels: ['sync'],
+              body: [
+                '自动合并 `upstream/master` 失败了，需要手动处理：',
+                '',
+                '```bash',
+                'git fetch upstream && git merge upstream/master',
+                '# 解决冲突后',
+                'git push origin master',
+                '```',
+                '',
+                '冲突通常只会来自 `patches/`、`.github/` 这类本仓库新增的文件。如果上游改动了',
+                '`AppInstallManager` / `SessionInstallManager` / `verification-metadata.xml`，',
+                '合并会成功，但 `build-release` 里打补丁可能会失败，见该次构建日志。',
+              ].join('\n'),
+            });

@@ -1,0 +1,137 @@
+name: build-release
+
+# Builds the patched app, signs it, publishes a GitHub release and refreshes the self hosted
+# F-Droid repository on gh-pages.
+#
+# Triggered by every push to master, i.e. also by the daily upstream sync.
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKM" ]; then
+            echo "sdkmanager not found at $SDKM" >&2
+            exit 1
+          fi
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          "$SDKM" --install "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+          echo "$SDK/build-tools/36.0.0" >> "$GITHUB_PATH"
+
+      - name: Apply patches
+        run: bash scripts/apply-patches.sh
+
+      - name: Inject version
+        id: version
+        run: bash scripts/inject-version.sh
+
+      - name: Preload the self hosted repository
+        env:
+          REPO_URL: ${{ vars.REPO_URL }}
+          REPO_CERT_HEX: ${{ vars.REPO_CERT_HEX }}
+        run: bash scripts/inject-repo.sh
+
+      - name: Build and sign
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: bash scripts/build-apk.sh
+
+      - name: Build release notes
+        env:
+          VN: ${{ steps.version.outputs.version_name }}
+          UVN: ${{ steps.version.outputs.upstream_version_name }}
+          UVC: ${{ steps.version.outputs.upstream_version_code }}
+        run: |
+          set -euo pipefail
+          {
+            echo "上游版本：${UVN} (${UVC})，本版基于 ${GITHUB_SHA:0:8} 构建。"
+            echo
+            echo "安装方式：下载 APK 后手动安装（首次）。此后的更新可以直接在本客户端内完成，"
+            echo "安装过程通过 Shizuku 进行，不需要系统自带的软件包安装器。"
+            echo
+            echo "## 上游变更"
+            PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            if [ -n "$PREV" ]; then
+              git log --no-merges --oneline "$PREV"..HEAD | head -60
+            else
+              git log --no-merges --oneline -20
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VN: ${{ steps.version.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" build/dist/*.apk \
+            --title "$VN" \
+            --notes-file release-notes.md
+          MAPPING=$(find app/build/outputs/mapping -name 'mapping.txt' | head -1 || true)
+          if [ -n "$MAPPING" ]; then
+            gh release upload "$TAG" "$MAPPING"
+          fi
+
+      - name: Publish F-Droid repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APK: build/dist/fdroid-shizuku-${{ steps.version.outputs.version_code }}.apk
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          REPO_URL: ${{ vars.REPO_URL }}
+          REPO_KEYSTORE_BASE64: ${{ secrets.REPO_KEYSTORE_BASE64 }}
+          REPO_STORE_PASSWORD: ${{ secrets.REPO_STORE_PASSWORD }}
+          REPO_KEY_ALIAS: ${{ secrets.REPO_KEY_ALIAS }}
+          REPO_KEY_PASSWORD: ${{ secrets.REPO_KEY_PASSWORD }}
+        run: |
+          pipx install fdroidserver
+          export PATH="$HOME/.local/bin:$PATH"
+          bash scripts/publish-repo.sh
+
+      - name: Upload build artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fdroid-shizuku-${{ github.run_number }}
+          path: |
+            build/dist/*.apk
+            release-notes.md
+          retention-days: 14

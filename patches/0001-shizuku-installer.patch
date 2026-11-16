@@ -1,0 +1,469 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index ec5c001d6..2ef9d7600 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -56,7 +56,8 @@ android {
+     }
+     create("full") {
+       dimension = "variant"
+-      applicationIdSuffix = ".fdroid"
++      // [SHIZUKU-PATCH] own package name, so this can coexist with the official F-Droid
++      applicationIdSuffix = ".fdroid.shizuku"
+     }
+     create("default") { dimension = "release" }
+     create("nightly") {
+@@ -140,6 +141,10 @@ dependencies {
+ 
+   implementation(libs.okhttp)
+ 
++  // [SHIZUKU-PATCH] Shizuku API + provider to install APKs without the system package installer
++  implementation("dev.rikka.shizuku:api:13.1.5")
++  implementation("dev.rikka.shizuku:provider:13.1.5")
++
+   implementation(libs.hilt.android)
+   implementation(libs.androidx.hilt.navigation.compose)
+   ksp(libs.hilt.android.compiler)
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 1d4883e2d..ec4899ac8 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -46,6 +46,15 @@
+         android:supportsRtl="true"
+         android:theme="@style/Theme.FDroid"
+         tools:targetApi="33">
++        <!-- [SHIZUKU-PATCH] required by the Shizuku API, the permission it needs is merged in
++             from the rikka.shizuku:provider manifest -->
++        <provider
++            android:name="rikka.shizuku.ShizukuProvider"
++            android:authorities="${applicationId}.shizuku"
++            android:enabled="true"
++            android:exported="true"
++            android:multiprocess="false"
++            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+         <activity
+             android:name=".MainActivity"
+             android:exported="true"
+diff --git a/app/src/main/kotlin/org/fdroid/install/AppInstallManager.kt b/app/src/main/kotlin/org/fdroid/install/AppInstallManager.kt
+index 763d95839..3b1d3eef4 100644
+--- a/app/src/main/kotlin/org/fdroid/install/AppInstallManager.kt
++++ b/app/src/main/kotlin/org/fdroid/install/AppInstallManager.kt
+@@ -38,6 +38,7 @@ import org.fdroid.history.HistoryManager
+ import org.fdroid.history.InstallEvent
+ import org.fdroid.history.UninstallEvent
+ import org.fdroid.index.v2.PackageVersion
++import org.fdroid.install.shizuku.ShizukuInstaller
+ import org.fdroid.utils.IoDispatcher
+ import org.fdroid.utils.isOldXiaomi
+ 
+@@ -376,6 +377,10 @@ constructor(
+         )
+       }
+ 
++    // [SHIZUKU-PATCH] prefer installing through Shizuku, it does not need the system installer at
++    // all. Returns null when Shizuku is unavailable, so the unmodified upstream flow continues.
++    ShizukuInstaller.get(context).install(newState, file)?.let { return it }
++
+     // Xiaomi MIUI is known to break the PackageInstaller API in several ways.
+     // Disabling MIUI "optimizations" in developer options fixes it,
+     // but we can't ask users to do this (bad UX).
+diff --git a/app/src/main/kotlin/org/fdroid/install/SessionInstallManager.kt b/app/src/main/kotlin/org/fdroid/install/SessionInstallManager.kt
+index a945581ef..81decd648 100644
+--- a/app/src/main/kotlin/org/fdroid/install/SessionInstallManager.kt
++++ b/app/src/main/kotlin/org/fdroid/install/SessionInstallManager.kt
+@@ -46,6 +46,7 @@ import mu.KotlinLogging
+ import org.fdroid.LocaleChooser.getBestLocale
+ import org.fdroid.database.AppMetadata
+ import org.fdroid.index.v2.PackageVersion
++import org.fdroid.install.shizuku.ShizukuInstaller
+ import org.fdroid.ui.utils.isAppInForeground
+ import org.fdroid.utils.IoDispatcher
+ import org.fdroid.utils.isChina
+@@ -124,6 +125,11 @@ constructor(
+     version: PackageVersion,
+     canRequestUserConfirmationNow: Boolean,
+   ): PreApprovalResult {
++    // [SHIZUKU-PATCH] Shizuku installs with shell privileges, pre-approval is neither needed nor wanted
++    if (ShizukuInstaller.isReady()) {
++      log.info { "Shizuku is ready, no pre-approval needed for ${app.packageName}." }
++      return PreApprovalResult.NotSupported
++    }
+     return if (!context.isAppInForeground()) {
+       log.info { "App not in foreground, pre-approval for ${app.packageName} not supported." }
+       PreApprovalResult.NotSupported
+diff --git a/app/src/main/kotlin/org/fdroid/install/shizuku/ShellInstallService.kt b/app/src/main/kotlin/org/fdroid/install/shizuku/ShellInstallService.kt
+new file mode 100644
+index 000000000..e426dfc92
+--- /dev/null
++++ b/app/src/main/kotlin/org/fdroid/install/shizuku/ShellInstallService.kt
+@@ -0,0 +1,130 @@
++package org.fdroid.install.shizuku
++
++import android.annotation.SuppressLint
++import android.os.Binder
++import android.os.Parcel
++import android.os.ParcelFileDescriptor
++import android.util.Log
++import androidx.annotation.Keep
++import java.io.File
++import java.io.FileInputStream
++import java.io.FileOutputStream
++
++/** Result of one installation attempt, marshalled back to the app process. */
++data class ShellInstallResult(val success: Boolean, val message: String?)
++
++/**
++ * [SHIZUKU-PATCH] Runs in the process that Shizuku starts for us, which has the uid of Shizuku's
++ * backend (2000 - shell - when Shizuku runs via adb/wireless debugging).
++ *
++ * It is instantiated reflectively by Shizuku, therefore the class name and the default constructor
++ * must survive R8 (see [Keep]).
++ *
++ * The only thing it does: take the APK from the app, stage it in /data/local/tmp (writable by shell)
++ * and let `cmd package install` do the actual installation. That is the same mechanism `adb install`
++ * uses, so no package installer UI is involved and no user confirmation is needed.
++ */
++@Keep
++@SuppressLint("SdCardPath")
++class ShellInstallService : Binder() {
++
++  companion object {
++    private const val TAG = "ShizukuShellInstall"
++
++    /** Must match what [ShizukuInstaller] writes into its [Parcel]. */
++    const val DESCRIPTOR = "org.fdroid.install.shizuku.IShellInstall"
++
++    /** Arbitrary transaction code, well above the ones Binder itself uses. */
++    const val TRANSACTION_INSTALL = 0x00FD_0001
++
++    /** Shizuku sends this to user services to ask them to clean up and exit (see Shizuku docs). */
++    private const val TRANSACTION_DESTROY = 16777115
++
++    private const val TMP_DIR = "/data/local/tmp"
++
++    /** Use the absolute path, the PATH of a user service process is not guaranteed. */
++    private const val CMD = "/system/bin/cmd"
++
++    private const val BUFFER_SIZE = 64 * 1024
++
++  }
++
++  override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
++    if (code == TRANSACTION_DESTROY) {
++      Log.i(TAG, "Shizuku asked us to exit")
++      System.exit(0)
++      return true
++    }
++    if (code != TRANSACTION_INSTALL) return super.onTransact(code, data, reply, flags)
++
++    data.enforceInterface(DESCRIPTOR)
++    val apk = data.readFileDescriptor()
++    val size = data.readLong()
++    val installerPackage = data.readString().orEmpty()
++    val userId = data.readInt()
++
++    val result =
++      if (apk == null) {
++        ShellInstallResult(false, "no file descriptor received")
++      } else {
++        try {
++          install(apk, size, installerPackage, userId)
++        } finally {
++          runCatching { apk.close() }
++        }
++      }
++
++    if (reply != null) {
++      reply.writeNoException()
++      reply.writeInt(if (result.success) 1 else 0)
++      reply.writeString(result.message)
++    }
++    return true
++  }
++
++  private fun install(
++    apk: ParcelFileDescriptor,
++    size: Long,
++    installerPackage: String,
++    userId: Int,
++  ): ShellInstallResult {
++    val tmpFile = File.createTempFile("fdroid-shizuku-", ".apk", File(TMP_DIR))
++    return try {
++      Log.i(TAG, "Staging APK to ${tmpFile.absolutePath} ($size bytes)")
++      FileInputStream(apk.fileDescriptor).use { input ->
++        FileOutputStream(tmpFile).use { output -> input.copyTo(output, BUFFER_SIZE) }
++      }
++      val written = tmpFile.length()
++      if (size > 0 && written != size) {
++        return ShellInstallResult(false, "staged ${written} of $size bytes")
++      }
++      val command =
++        buildList {
++            add(CMD)
++            add("package")
++            add("install")
++            add("-r")
++            add("-i")
++            add(installerPackage)
++            if (userId >= 0) {
++              add("--user")
++              add(userId.toString())
++            }
++            add(tmpFile.absolutePath)
++          }
++          .toTypedArray()
++      Log.i(TAG, "Running: ${command.joinToString(" ")}")
++      val process = ProcessBuilder(*command).redirectErrorStream(true).start()
++      val output = process.inputStream.bufferedReader().use { it.readText() }
++      val exitCode = process.waitFor()
++      val success = exitCode == 0 && output.contains("Success", ignoreCase = true)
++      if (!success) Log.w(TAG, "cmd package install failed (exit=$exitCode): $output")
++      ShellInstallResult(success, if (success) null else "exit=$exitCode ${output.trim().take(500)}")
++    } catch (e: Exception) {
++      Log.e(TAG, "Shizuku install failed", e)
++      ShellInstallResult(false, "${e::class.java.simpleName}: ${e.message}")
++    } finally {
++      runCatching { tmpFile.delete() }
++    }
++  }
++}
+diff --git a/app/src/main/kotlin/org/fdroid/install/shizuku/ShizukuInstaller.kt b/app/src/main/kotlin/org/fdroid/install/shizuku/ShizukuInstaller.kt
+new file mode 100644
+index 000000000..006e68db0
+--- /dev/null
++++ b/app/src/main/kotlin/org/fdroid/install/shizuku/ShizukuInstaller.kt
+@@ -0,0 +1,222 @@
++package org.fdroid.install.shizuku
++
++import android.content.ComponentName
++import android.content.Context
++import android.content.ServiceConnection
++import android.content.pm.PackageManager
++import android.os.IBinder
++import android.os.Parcel
++import android.os.ParcelFileDescriptor
++import java.io.File
++import kotlin.coroutines.resume
++import kotlinx.coroutines.suspendCancellableCoroutine
++import kotlinx.coroutines.withTimeoutOrNull
++import mu.KotlinLogging
++import org.fdroid.install.InstallState
++import org.fdroid.install.InstallStateWithInfo
++import org.fdroid.ui.utils.isAppInForeground
++import rikka.shizuku.Shizuku
++
++/**
++ * [SHIZUKU-PATCH] Installs APKs through Shizuku, so no (possibly crippled) system package installer
++ * is involved at all.
++ *
++ * The actual work is done by [ShellInstallService], which Shizuku starts in a process running with
++ * the uid of Shizuku's backend (2000 for adb, 0 for root). This class only binds that service,
++ * hands over the APK as file descriptor and maps the result back to an [InstallState].
++ *
++ * Every failure that means "Shizuku is not usable right now" results in `null`, so the caller can
++ * fall back to the unmodified upstream installation flow.
++ */
++class ShizukuInstaller private constructor(private val context: Context) {
++
++  companion object {
++    private const val PERMISSION_REQUEST_CODE = 0x5A17
++    private const val PERMISSION_TIMEOUT_MS = 90_000L
++    private const val BIND_TIMEOUT_MS = 15_000L
++    private const val SERVICE_VERSION = 1
++
++    @Volatile private var instance: ShizukuInstaller? = null
++
++    /**
++     * True if Shizuku is installed *and* running. Cheap to call, does not request anything.
++     *
++     * This must not throw, it is called from code paths that need to stay identical to upstream.
++     */
++    fun isAvailable(): Boolean =
++      try {
++        Shizuku.pingBinder() && !Shizuku.isPreV11()
++      } catch (_: Throwable) {
++        false
++      }
++
++    /** True if Shizuku is running and we have already been granted its permission. */
++    fun isReady(): Boolean =
++      isAvailable() &&
++        try {
++          Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
++        } catch (_: Throwable) {
++          false
++        }
++
++    fun get(context: Context): ShizukuInstaller =
++      instance
++        ?: synchronized(this) {
++          instance ?: ShizukuInstaller(context.applicationContext).also { instance = it }
++        }
++  }
++
++  private val log = KotlinLogging.logger {}
++
++  private val serviceArgs =
++    Shizuku.UserServiceArgs(
++        ComponentName(context.packageName, ShellInstallService::class.java.name)
++      )
++      .daemon(false)
++      .tag("fdroid-shizuku-install")
++      .processNameSuffix("shizuku")
++      .debuggable(false)
++      .version(SERVICE_VERSION)
++
++  private var binder: IBinder? = null
++  private var connection: ServiceConnection? = null
++
++  /**
++   * Installs the given [apkFile].
++   *
++   * @return the new [InstallState], or `null` if Shizuku can not be used (caller must fall back).
++   */
++  suspend fun install(state: InstallStateWithInfo, apkFile: File): InstallState? {
++    if (!isAvailable()) return null
++    if (!ensurePermission()) return null
++    val service = obtainService()
++    if (service == null) {
++      log.warn { "Could not bind Shizuku user service, falling back." }
++      return null
++    }
++    val size = apkFile.length()
++    log.info { "Installing ${state.name} (${apkFile.name}, $size bytes) through Shizuku" }
++    val result =
++      try {
++        ParcelFileDescriptor.open(apkFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
++          callInstall(
++            binder = service,
++            apk = pfd,
++            size = size,
++            installerPackage = context.packageName,
++            userId = currentUserId(),
++          )
++        }
++      } catch (e: Exception) {
++        log.warn(e) { "Shizuku installation of ${state.name} threw, falling back." }
++        return null
++      }
++    return if (result.success) {
++      log.info { "Shizuku installed ${state.name} successfully." }
++      InstallState.Installed(
++        name = state.name,
++        versionName = state.versionName,
++        currentVersionName = state.currentVersionName,
++        lastUpdated = state.lastUpdated,
++        iconModel = state.iconModel,
++      )
++    } else {
++      log.warn { "Shizuku installation of ${state.name} failed: ${result.message}" }
++      InstallState.Error("Shizuku: ${result.message ?: "unknown error"}", state)
++    }
++  }
++
++  /** Asks for the Shizuku permission if needed. Only possible while we are in the foreground. */
++  private suspend fun ensurePermission(): Boolean {
++    if (!isAvailable()) return false
++    if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) return true
++    if (!context.isAppInForeground()) {
++      log.info { "Shizuku permission not granted and app not in foreground, can not ask for it." }
++      return false
++    }
++    log.info { "Requesting Shizuku permission..." }
++    return withTimeoutOrNull(PERMISSION_TIMEOUT_MS) {
++      suspendCancellableCoroutine { cont ->
++        val listener =
++          object : Shizuku.OnRequestPermissionResultListener {
++            override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
++              if (requestCode != PERMISSION_REQUEST_CODE) return
++              Shizuku.removeRequestPermissionResultListener(this)
++              if (cont.isActive) {
++                cont.resume(grantResult == PackageManager.PERMISSION_GRANTED)
++              }
++            }
++          }
++        Shizuku.addRequestPermissionResultListener(listener)
++        cont.invokeOnCancellation { Shizuku.removeRequestPermissionResultListener(listener) }
++        try {
++          Shizuku.requestPermission(PERMISSION_REQUEST_CODE)
++        } catch (e: Exception) {
++          log.warn(e) { "Requesting Shizuku permission failed." }
++          Shizuku.removeRequestPermissionResultListener(listener)
++          if (cont.isActive) cont.resume(false)
++        }
++      }
++    } ?: false
++  }
++
++  /** Binds (and caches) the shell user service. */
++  private suspend fun obtainService(): IBinder? {
++    binder?.let { if (it.isBinderAlive) return it }
++    return withTimeoutOrNull(BIND_TIMEOUT_MS) {
++      suspendCancellableCoroutine { cont ->
++        val conn =
++          object : ServiceConnection {
++            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
++              binder = service
++              if (cont.isActive) cont.resume(service)
++            }
++
++            override fun onServiceDisconnected(name: ComponentName?) {
++              binder = null
++            }
++          }
++        connection = conn
++        try {
++          Shizuku.bindUserService(serviceArgs, conn)
++        } catch (e: Exception) {
++          log.warn(e) { "Binding Shizuku user service failed." }
++          if (cont.isActive) cont.resume(null)
++        }
++        cont.invokeOnCancellation {
++          runCatching { Shizuku.unbindUserService(serviceArgs, conn, true) }
++        }
++      }
++    }
++  }
++
++  private fun callInstall(
++    binder: IBinder,
++    apk: ParcelFileDescriptor,
++    size: Long,
++    installerPackage: String,
++    userId: Int,
++  ): ShellInstallResult {
++    val data = Parcel.obtain()
++    val reply = Parcel.obtain()
++    return try {
++      data.writeInterfaceToken(ShellInstallService.DESCRIPTOR)
++      data.writeFileDescriptor(apk.fileDescriptor)
++      data.writeLong(size)
++      data.writeString(installerPackage)
++      data.writeInt(userId)
++      binder.transact(ShellInstallService.TRANSACTION_INSTALL, data, reply, 0)
++      reply.readException()
++      ShellInstallResult(reply.readInt() == 1, reply.readString())
++    } finally {
++      data.recycle()
++      reply.recycle()
++    }
++  }
++
++  /**
++   * ``-1`` means "no --user flag", which makes `cmd package install` install for all users - the
++   * same default `pm install` has. `Context#getUser()` is hidden, so don't bother.
++   */
++  private fun currentUserId(): Int = -1
++}
+diff --git a/gradle/verification-metadata.xml b/gradle/verification-metadata.xml
+index 3674e207d..4fa65b552 100644
+--- a/gradle/verification-metadata.xml
++++ b/gradle/verification-metadata.xml
+@@ -7,6 +7,8 @@
+       <trusted-artifacts>
+          <trust file=".*-javadoc[.]jar" regex="true"/>
+          <trust file=".*-sources[.]jar" regex="true"/>
++         <!-- [SHIZUKU-PATCH] Shizuku API, pulled in at a pinned version -->
++         <trust group="dev.rikka.shizuku" reason="Shizuku API for installing APKs"/>
+       </trusted-artifacts>
+       <trusted-keys>
+          <trusted-key id="0394681ADDDDB4F6388A64D295123567C1886C47" group="ch.acra" name="acra"/>
