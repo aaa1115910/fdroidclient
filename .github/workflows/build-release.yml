@@ -46,7 +46,9 @@ jobs:
             exit 1
           fi
           yes | "$SDKM" --licenses >/dev/null 2>&1 || true
-          "$SDKM" --install "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+          # "android-37" and "android-37.0" both exist depending on the SDK generation
+          "$SDKM" --install "platforms;android-37" || "$SDKM" --install "platforms;android-37.0"
+          "$SDKM" --install "build-tools;36.0.0" "platform-tools"
           echo "$SDK/build-tools/36.0.0" >> "$GITHUB_PATH"
 
       - name: Apply patches
