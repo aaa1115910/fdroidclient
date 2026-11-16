@@ -124,14 +124,12 @@ AppInstallManager.install()
 
 配套约定：
 
-- `master` 只允许出现「上游没有的文件」（`patches/`、`.github/`、`scripts/`、`metadata/`、`docs/`）。
+- `master` 只允许出现「上游没有的文件」（`patches/`、`.github/`、`scripts/`、`docs/`）。
   这样 `git merge upstream/master` 永远是干净的 merge commit，可无人值守。
 - 补丁用 `git diff` 格式（不是 `format-patch`），CI 用 `git apply --3way`，冲突时留下 `.rej` 便于排查。
 - 本地的 `dev/shizuku` 分支保留「已应用补丁」的完整代码，方便 IDE 调试；改完后重新 `git diff` 生成补丁。
-- 补丁按关注点拆 3 个，冲突面最小：
-  - `0001-build-application-id.patch`（包名）
-  - `0002-shizuku-installer.patch`（安装实现 + 两个钩子 + manifest + 依赖）
-  - `0003-default-repos.patch`（预置自建源）
+- 实际只保留 **1 个补丁** `patches/0001-shizuku-installer.patch`：包名、安装实现、两个钩子、manifest、
+  依赖与依赖校验元数据都在里面。自建源条目不在补丁中，改为构建时注入（见 `scripts/inject-repo.sh`）。
 
 生成补丁的日常流程：
 
@@ -139,7 +137,7 @@ AppInstallManager.install()
 git switch -c dev/shizuku origin/master
 # ...改代码、调试验证...
 git add -A && git commit -m "shizuku installer"
-git diff origin/master..HEAD > ../patches/0002-shizuku-installer.patch   # 注意：以 master 为基线
+git diff origin/master..HEAD -- app gradle > patches/0001-shizuku-installer.patch
 # 回到 master，只提交 patches 目录
 git switch master && cp ../patches/*.patch patches/ && git add patches && git commit -m "update patches"
 ```
@@ -459,16 +457,14 @@ grep -q "versionCode = $VC" app/build.gradle.kts || { echo "version injection fa
   sync-upstream.yml
   build-release.yml
 patches/
-  0001-build-application-id.patch
-  0002-shizuku-installer.patch
-  0003-default-repos.patch
+  0001-shizuku-installer.patch
 scripts/
   apply-patches.sh
   inject-version.sh
+  inject-repo.sh        # 把自建源写进 default_repos.json
   build-apk.sh          # 构建 + zipalign + apksigner + 校验
   publish-repo.sh       # fdroidserver 生成索引并推 gh-pages
-metadata/
-  org.fdroid.fdroid.shizuku.yml
+  gen-keys.sh           # 一次性密钥生成
 docs/
   shizuku-fork-plan.md
 ```
