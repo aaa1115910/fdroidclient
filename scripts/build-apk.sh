@@ -26,7 +26,12 @@ if [ -z "$BUILD_TOOLS" ]; then
 fi
 
 export JAVA_HOME="${JAVA_HOME:-}"
-./gradlew --no-daemon --console=plain assembleFullDefaultRelease
+# extra Gradle flags, e.g. GRADLE_ARGS="-x lintVitalAnalyzeFullDefaultRelease" for low memory boxes
+EXTRA_ARGS=()
+if [ -n "${GRADLE_ARGS:-}" ]; then
+  read -r -a EXTRA_ARGS <<< "${GRADLE_ARGS}"
+fi
+./gradlew --no-daemon --console=plain assembleFullDefaultRelease "${EXTRA_ARGS[@]}"
 
 UNSIGNED=$(find app/build/outputs/apk/fullDefault/release -name '*-unsigned.apk' | head -1)
 if [ -z "$UNSIGNED" ]; then

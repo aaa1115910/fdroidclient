@@ -12,6 +12,8 @@ GRADLE_FILE="app/build.gradle.kts"
 
 VC_BASE=$(grep -m1 -oP 'versionCode = \K[0-9]+' "$GRADLE_FILE" || true)
 VN_BASE=$(grep -m1 -oP 'versionName = "\K[^"]+' "$GRADLE_FILE" || true)
+# make repeated runs idempotent (local rebuilds), CI always starts from a clean checkout
+VN_BASE="${VN_BASE%-shizuku}"
 if [ -z "$VC_BASE" ] || [ -z "$VN_BASE" ]; then
   echo "error: could not find versionCode/versionName in $GRADLE_FILE" >&2
   exit 1
