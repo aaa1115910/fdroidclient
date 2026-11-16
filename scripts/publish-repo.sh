@@ -72,6 +72,14 @@ echo "==> indexing $(basename "$APK") as ${PKG} ${VERSION_CODE}"
 
 ls -la "$WORK/fd/repo"
 
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  rm -rf build/repo-preview
+  mkdir -p build
+  cp -a "$WORK/fd/repo" build/repo-preview
+  echo "==> DRY_RUN, repository left in build/repo-preview"
+  exit 0
+fi
+
 echo "==> publishing to gh-pages"
 mkdir -p "$WORK/site" && cd "$WORK/site"
 git init -q
