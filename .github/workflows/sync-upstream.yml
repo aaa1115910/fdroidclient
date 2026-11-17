@@ -1,10 +1,11 @@
 name: sync-upstream
 
-# Keeps this fork up to date with https://gitlab.com/fdroid/fdroidclient.
+# Keeps `master` a pure mirror of https://gitlab.com/fdroid/fdroidclient and merges that mirror
+# into the `shizuku` branch, which carries this fork's additions (patches/, scripts/, .github/).
 #
-# `master` only ever *adds* files on top of upstream (patches/, scripts/, .github/, metadata/),
-# the source changes live in patches/. That is why this merge is practically conflict free:
-# upstream never touches the paths we added.
+# Because `master` never contains commits of its own, it is always a fast forward of upstream and
+# GitHub's "Sync fork" button keeps working. Because `shizuku` only ever *adds* files, merging the
+# mirror into it is practically conflict free.
 
 on:
   schedule:
@@ -26,30 +27,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: master
+          ref: shizuku
           fetch-depth: 0
 
-      - name: Merge upstream master
-        id: merge
+      - name: Mirror upstream into master
+        id: mirror
         run: |
           set -euo pipefail
           git config user.name 'fdroid-shizuku-bot'
           git config user.email 'bot@users.noreply.github.com'
           git remote add upstream https://gitlab.com/fdroid/fdroidclient.git 2>/dev/null || true
           git fetch --no-tags --prune upstream master
-          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+          git checkout -B master FETCH_HEAD
+          git push origin master --force
+          echo "upstream_sha=$(git rev-parse --short FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Merge the mirror into shizuku
+        id: merge
+        run: |
+          set -euo pipefail
+          git checkout shizuku
+          if git merge-base --is-ancestor master shizuku; then
             echo 'Upstream is already merged, nothing to do.'
             echo 'changed=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Merging $(git rev-parse --short FETCH_HEAD) ..."
-          git merge --no-edit FETCH_HEAD
+          echo "Merging master (${{ steps.mirror.outputs.upstream_sha }}) into shizuku ..."
+          git merge --no-edit master
           echo 'changed=true' >> "$GITHUB_OUTPUT"
-          echo "upstream_sha=$(git rev-parse --short FETCH_HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Push to master
+      - name: Push shizuku
         if: steps.merge.outputs.changed == 'true'
-        run: git push origin HEAD:master
+        run: git push origin shizuku
 
       - name: Open issue when the merge fails
         if: failure()
@@ -63,16 +72,17 @@ jobs:
               title: `上游同步失败 ${date}`,
               labels: ['sync'],
               body: [
-                '自动合并 `upstream/master` 失败了，需要手动处理：',
+                '自动合并 `master`（上游镜像）到 `shizuku` 失败了，需要手动处理：',
                 '',
                 '```bash',
-                'git fetch upstream && git merge upstream/master',
+                'git fetch origin',
+                'git switch shizuku',
+                'git merge origin/master',
                 '# 解决冲突后',
-                'git push origin master',
+                'git push origin shizuku',
                 '```',
                 '',
-                '冲突通常只会来自 `patches/`、`.github/` 这类本仓库新增的文件。如果上游改动了',
-                '`AppInstallManager` / `SessionInstallManager` / `verification-metadata.xml`，',
-                '合并会成功，但 `build-release` 里打补丁可能会失败，见该次构建日志。',
+                '冲突通常只会来自 `patches/`、`.github/` 这类本仓库新增的文件。',
+                '如果合并没问题但构建失败，多半是补丁打不上，见 `build-release` 那次构建的日志。',
               ].join('\n'),
             });

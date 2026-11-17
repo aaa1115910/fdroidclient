@@ -3,11 +3,12 @@ name: build-release
 # Builds the patched app, signs it, publishes a GitHub release and refreshes the self hosted
 # F-Droid repository on gh-pages.
 #
-# Triggered by every push to master, i.e. also by the daily upstream sync.
+# Triggered by every push to `shizuku` (the fork branch), i.e. also by the daily upstream sync.
+# `master` is a pure mirror of upstream and never triggers a build.
 
 on:
   push:
-    branches: [master]
+    branches: [shizuku]
     paths-ignore:
       - 'docs/**'
       - '**.md'
@@ -26,6 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: shizuku
           fetch-depth: 0
 
       - uses: actions/setup-java@v4

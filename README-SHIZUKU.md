@@ -11,9 +11,19 @@
 - 无 Shizuku 时：**行为与上游完全一致**（自动回落）
 - 除了安装入口，其余功能（仓库、搜索、下载、通知、历史……）都是上游原样
 
+## 分支模型
+
+| 分支 | 内容 | 谁维护 |
+| --- | --- | --- |
+| `master` | **纯上游镜像**，不含任何本仓库提交 | `sync-upstream` 每天强制同步，也可用 GitHub 的「Sync fork」 |
+| `shizuku`（默认分支） | 上游镜像 + 下面这些**新增**文件 | 人工提交 + 自动合并上游 |
+
+源码改动不放在任何分支的文件里，而是全部塞进 `patches/`，构建时再打上去。这样 `master`
+永远是上游的 fast-forward，`shizuku` 相对 `master` 只增加文件，两者的合并几乎不可能冲突。
+
 ## 仓库结构
 
-`master` = 上游 master + 下面这些**新增**文件，源码改动全部在 `patches/` 里：
+`shizuku` 分支 = 上游 master + 下面这些**新增**文件，源码改动全部在 `patches/` 里：
 
 ```
 patches/
@@ -31,8 +41,8 @@ scripts/
 docs/shizuku-fork-plan.md         完整方案与设计说明
 ```
 
-这样做的原因：上游永远不可能和我们「新增的文件」冲突，所以 `git merge upstream/master` 可以
-无人值守；万一上游重构了安装相关代码，问题只会表现为**打补丁失败**，CI 直接红，定位明确。
+这样做的原因：上游永远不可能和我们「新增的文件」冲突，所以「镜像 → shizuku」的合并可以无人值守；
+万一上游重构了安装相关代码，问题只会表现为**打补丁失败**，CI 直接红，定位明确。
 
 ## 它是怎么工作的
 
@@ -107,7 +117,8 @@ gh workflow run build-release.yml
 
 ## 日常维护
 
-- **上游同步**：每天 03:17（北京时间）自动 `git merge upstream/master` 并触发构建。
+- **上游同步**：每天 03:17（北京时间）先把 `master` 重置为上游镜像并强推，再把 `master` 合并进
+  `shizuku`；有变化就触发构建。`master` 上永远不会出现本仓库的提交。
 - **版本号**：`versionCode` = 构建时的 Unix 时间戳/60（和上游 nightly 同款），永远递增；
   `versionName` = `<上游版本>-shizuku`。
 - **自更新**：客户端默认「仅 Wi-Fi 自动更新仓库 + 自动更新应用」，所以在 Wi-Fi 下会自动发现
@@ -118,12 +129,12 @@ gh workflow run build-release.yml
 上游改动碰到了钩子所在的位置。本地修复流程：
 
 ```bash
-git switch -c dev/shizuku origin/master
+git switch -c dev/shizuku origin/shizuku  # 以 shizuku 为基线
 bash scripts/apply-patches.sh          # 会失败并留下 .rej / 冲突标记
 # 手动解决，保证编译通过
 git add -A && git commit -m "rebase patches onto $(git rev-parse --short origin/master)"
-git diff origin/master..HEAD -- app gradle > patches/0001-shizuku-installer.patch
-git switch master && git add patches && git commit -m "update patches"
+git diff origin/master..HEAD -- app gradle > patches/0001-shizuku-installer.patch  # 相对上游镜像
+git switch shizuku && git add patches && git commit -m "update patches"
 ```
 
 小提示：钩子都带 `[SHIZUKU-PATCH]` 注释，`grep -rn "SHIZUKU-PATCH" .` 能找到全部改动点。

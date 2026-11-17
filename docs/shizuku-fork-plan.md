@@ -10,6 +10,8 @@
 > - 自建源条目不在补丁里，改为构建时由 `scripts/inject-repo.sh` 注入（仓库地址与证书属于部署参数）。
 > - 产物输出到 `build/dist/`（`build/` 已被上游 .gitignore 忽略，避免误提交）。
 > - 新增依赖需要过 Gradle 依赖校验，补丁里加入 `<trust group="dev.rikka.shizuku"/>`。
+> - 分支模型改为：`master` 是**纯上游镜像**（只做强推同步，无本仓库提交），所有改动、CI 与默认
+>   分支都是 `shizuku`；同步流程 = 先把 `master` 重置为上游，再合并进 `shizuku`。
 > - 本地验证命令见 `README-SHIZUKU.md`。
 
 > 基线：本仓库当前提交 `9dd8b2f94`（上游 master），版本 `2.0.3 (versionCode 2000053)`，
@@ -441,7 +443,8 @@ grep -q "versionCode = $VC" app/build.gradle.kts || { echo "version injection fa
 
 | 分支 | 内容 | 谁写 |
 | --- | --- | --- |
-| `master`（默认） | 上游 master + 仅新增文件（`patches/`、`.github/`、`scripts/`、`metadata/`、`docs/`） | 人 / 同步机器人 |
+| `master` | **纯上游镜像**，不含任何本仓库提交 | `sync-upstream` 每天强推 |
+| `shizuku`（默认） | 上游镜像 + 仅新增文件（`patches/`、`.github/`、`scripts/`、`docs/`） | 人 / 同步机器人 |
 | `dev/shizuku` | 已应用补丁的完整代码，用于本地 IDE 调试与生成补丁 | 人（本地，可选推送） |
 
 规则：
