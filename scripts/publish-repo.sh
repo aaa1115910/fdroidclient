@@ -27,6 +27,8 @@ PKG="${PKG:-org.fdroid.fdroid.shizuku}"
 VERSION_NAME="${VERSION_NAME:-unknown}"
 SOURCE_REPO="${SOURCE_REPO:-https://github.com/${GITHUB_REPOSITORY}}"
 REPO_NAME="${REPO_NAME:-F-Droid Shizuku}"
+# GitHub Pages serves the gh-pages branch at /<repo>/, we put the repository into a subdirectory
+REPO_SUBDIR="${REPO_SUBDIR:-repo}"
 REPO_DESCRIPTION="${REPO_DESCRIPTION:-修改版 F-Droid 客户端（通过 Shizuku 静默安装程序）的自更新源}"
 
 if ! command -v fdroid >/dev/null; then
@@ -80,11 +82,24 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
   exit 0
 fi
 
-echo "==> publishing to gh-pages"
-mkdir -p "$WORK/site" && cd "$WORK/site"
+case "$REPO_URL" in
+  */"$REPO_SUBDIR" | */"$REPO_SUBDIR"/) ;;
+  *) echo "warning: REPO_URL '$REPO_URL' does not end with '/$REPO_SUBDIR', the served path will not match" >&2 ;;
+esac
+
+echo "==> publishing to gh-pages under /$REPO_SUBDIR/"
+mkdir -p "$WORK/site/$REPO_SUBDIR" && cd "$WORK/site"
 git init -q
 git checkout -q --orphan gh-pages
-cp -a "$WORK/fd/repo/." .
+cp -a "$WORK/fd/repo/." "$REPO_SUBDIR/"
+cat > index.html <<HTML
+<!doctype html>
+<meta charset="utf-8">
+<title>${REPO_NAME}</title>
+<h1>${REPO_NAME}</h1>
+<p>F-Droid 软件源：<a href="${REPO_SUBDIR}/">${REPO_URL}</a></p>
+<p>在客户端中「添加仓库」并填入上面的地址即可。</p>
+HTML
 touch .nojekyll
 git add -A
 git -c user.name="fdroid-shizuku-bot" \
