@@ -20,11 +20,12 @@ import org.fdroid.ui.categories.CategoryItem
 
 @Composable
 fun DiscoverPresenter(
+  databaseOpenStateFlow: StateFlow<Boolean>,
   newAppsFlow: Flow<List<AppOverviewItem>>,
   recentlyUpdatedAppsFlow: Flow<List<AppOverviewItem>>,
   mostDownloadedAppsFlow: Flow<List<AppOverviewItem>>,
   categoriesFlow: Flow<List<CategoryItem>>,
-  installedAppsFlow: StateFlow<Map<String, PackageInfo>>,
+  installedAppsFlow: StateFlow<Map<String, PackageInfo>?>,
   isFirstStart: Boolean,
   networkState: NetworkState,
   repoUpdateStateFlow: StateFlow<RepoUpdateState?>,
@@ -39,7 +40,7 @@ fun DiscoverPresenter(
     repository: Repository,
     proxyConfig: ProxyConfig?,
   ): AppDiscoverItem {
-    val isInstalled = installedApps.contains(packageName)
+    val isInstalled = installedApps?.containsKey(packageName) == true
     val imageModel = getIcon(localeList)?.getImageModel(repository, proxyConfig)
     return AppDiscoverItem(
       packageName = packageName,
@@ -75,36 +76,36 @@ fun DiscoverPresenter(
   val categories = categoriesFlow.collectAsState(null).value
   val repositoriesFlow = repoManager.repositoriesState
 
-  return if (
-    !mostDownloadedApps.isNullOrEmpty() ||
-      !newApps.isNullOrEmpty() ||
-      !categories.isNullOrEmpty() ||
-      !recentlyUpdatedApps.isNullOrEmpty()
+  val isDbClosed = !databaseOpenStateFlow.collectAsState().value
+  if (isDbClosed) {
+    return DbClosedDiscoverModel
+  }
+
+  if (
+    mostDownloadedApps.isNullOrEmpty() &&
+      newApps.isNullOrEmpty() &&
+      categories.isNullOrEmpty() &&
+      recentlyUpdatedApps.isNullOrEmpty()
   ) {
-    // As soon as we loaded a list,
-    // we start showing it on screen and update when other lists load.
-    // This is to speed up the time to first content on initial screen.
-    LoadedDiscoverModel(
-      newApps = newApps ?: emptyList(),
-      recentlyUpdatedApps = recentlyUpdatedApps ?: emptyList(),
-      mostDownloadedApps = mostDownloadedApps,
-      categories = categories?.groupBy { it.group },
-      hasRepoIssues = hasRepoIssuesFlow.collectAsState(false).value,
-    )
-  } else {
     // everything is still null or empty, so figure out why
     val repositories = repositoriesFlow.collectAsState().value
     if (repositories?.all { !it.enabled } == true) {
-      NoEnabledReposDiscoverModel
+      return NoEnabledReposDiscoverModel
     } else if (isFirstStart || recentlyUpdatedApps?.size == 0) {
       // There should always be recently updated apps,
       // because those don't have a freshness constraint.
       // In case the DB got cleared (e.g. though panic action or failed migration),
       // the isFirstStart condition would be false,
       // but we still want to go down first start path to update repos again.
-      FirstStartDiscoverModel(networkState, repoUpdateStateFlow.collectAsState().value)
-    } else {
-      LoadingDiscoverModel
+      return FirstStartDiscoverModel(networkState, repoUpdateStateFlow.collectAsState().value)
     }
   }
+  // Show data or loading animation
+  return LoadedDiscoverModel(
+    newApps = newApps,
+    recentlyUpdatedApps = recentlyUpdatedApps,
+    mostDownloadedApps = mostDownloadedApps,
+    categories = categories?.groupBy { it.group },
+    hasRepoIssues = hasRepoIssuesFlow.collectAsState(false).value,
+  )
 }

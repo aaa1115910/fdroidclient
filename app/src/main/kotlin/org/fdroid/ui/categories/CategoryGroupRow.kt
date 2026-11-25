@@ -1,16 +1,10 @@
 package org.fdroid.ui.categories
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -37,9 +31,9 @@ import org.fdroid.ui.FDroidContent
 import org.fdroid.ui.lists.AppListType
 import org.fdroid.ui.navigation.NavigationKey
 import org.fdroid.ui.utils.ExpandIconArrow
+import org.fdroid.ui.utils.VerticalAnimatedVisibility
 
 @Composable
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 fun CategoryGroupRow(
   group: CategoryGroup,
   categories: List<CategoryItem>,
@@ -73,12 +67,8 @@ fun CategoryGroupRow(
   ) {
     Text(text = stringResource(group.name), maxLines = 2, overflow = TextOverflow.Ellipsis)
   }
-  AnimatedVisibility(
-    visible = expanded,
-    enter = fadeIn() + expandVertically(),
-    exit = fadeOut() + shrinkVertically(),
-  ) {
-    ChipFlowRow(modifier = Modifier.padding(8.dp)) {
+  VerticalAnimatedVisibility(expanded) {
+    ChipFlexBox(modifier = Modifier.padding(8.dp)) {
       categories.forEach { categoryItem ->
         CategoryChip(
           categoryItem = categoryItem,

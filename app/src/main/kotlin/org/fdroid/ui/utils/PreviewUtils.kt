@@ -39,6 +39,7 @@ import org.fdroid.ui.details.LoadedAppDetailsItem
 import org.fdroid.ui.details.Permission
 import org.fdroid.ui.details.PermissionType
 import org.fdroid.ui.details.VersionItem
+import org.fdroid.ui.discover.LoadedDiscoverModel
 import org.fdroid.ui.lists.AntiFeatureItem
 import org.fdroid.ui.lists.AppListActions
 import org.fdroid.ui.lists.AppListInfo
@@ -314,6 +315,15 @@ val testApp =
     proxy = null,
   )
 
+val loadingDiscoverModel =
+  LoadedDiscoverModel(
+    newApps = null,
+    recentlyUpdatedApps = null,
+    mostDownloadedApps = null,
+    categories = null,
+    hasRepoIssues = false,
+  )
+
 fun getAppDetailsActions() =
   AppDetailsActions(
     installAction = { _, _, _ -> },
@@ -538,7 +548,7 @@ internal val myAppsModel =
               totalBytes = 100,
               startMillis = System.currentTimeMillis(),
             ),
-        )
+        ),
       ),
     appsWithIssue =
       listOf(
@@ -675,7 +685,7 @@ fun getRepoDetailsInfo(
       updateState = RepoUpdateProgress(42L, true, 0.75f),
       networkState = NetworkState(isOnline = false, isMetered = false),
       proxy = null,
-    )
+    ),
 ) =
   object : RepoDetailsInfo {
     override val model = model

@@ -8,6 +8,14 @@ import org.fdroid.repo.RepoUpdateProgress
 import org.fdroid.ui.ScreenshotTest
 import org.fdroid.ui.categories.CategoryGroups
 import org.fdroid.ui.categories.CategoryItem
+import org.fdroid.ui.utils.loadingDiscoverModel
+
+@Composable
+@PreviewTest
+@Preview(showBackground = true, showSystemUi = true)
+private fun DiscoverDbClosedTest() = ScreenshotTest {
+  Discover(discoverModel = DbClosedDiscoverModel, onListTap = {}, onAppTap = {}, onNav = {})
+}
 
 @Composable
 @PreviewTest
@@ -38,6 +46,15 @@ private fun DiscoverNoEnabledReposTest() = ScreenshotTest {
 private fun DiscoverTest() {
   ScreenshotTest {
     Discover(discoverModel = getLoadedModel(), onListTap = {}, onAppTap = {}, onNav = {})
+  }
+}
+
+@Composable
+@PreviewTest
+@Preview(showBackground = true, showSystemUi = true)
+private fun DiscoverLoadingTest() {
+  ScreenshotTest {
+    Discover(discoverModel = loadingDiscoverModel, onListTap = {}, onAppTap = {}, onNav = {})
   }
 }
 
@@ -109,7 +126,7 @@ private fun getLoadedModel(): LoadedDiscoverModel {
           CategoryItem(id = "Forum", name = "Forum"),
           CategoryItem(id = "Messaging", name = "Messaging"),
           CategoryItem(id = "Phone & SMS", name = "Phone & SMS"),
-        )
+        ),
     )
   return LoadedDiscoverModel(
     newApps = newApps,
