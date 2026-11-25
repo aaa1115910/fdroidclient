@@ -1,0 +1,24 @@
+diff --git a/app/src/main/kotlin/org/fdroid/download/DownloaderFactoryImpl.kt b/app/src/main/kotlin/org/fdroid/download/DownloaderFactoryImpl.kt
+index 1fdc4e878..069736f16 100644
+--- a/app/src/main/kotlin/org/fdroid/download/DownloaderFactoryImpl.kt
++++ b/app/src/main/kotlin/org/fdroid/download/DownloaderFactoryImpl.kt
+@@ -44,10 +44,17 @@ constructor(
+         password = repo.password,
+         tryFirstMirror = tryFirst,
+       )
+-    val v1OrUnknown = repo.formatVersion == null || repo.formatVersion == IndexFormatVersion.ONE
++    // [SHIZUKU-PATCH] Only repositories that are *known* to use the v1 index get the legacy
++    // downloader. A repo whose format version is still unknown - this is how the preloaded
++    // repositories from `default_repos.json` start out - must not fall into it: the legacy
++    // downloader kicks every download off with a HEAD request and resumes against the *compressed*
++    // representation, which never works for repositories hosted by GitHub Pages. Repositories the
++    // user added by hand (QR code / share link) are stored with formatVersion=2 by the add flow and
++    // therefore never hit that path, so preloaded and added repositories download differently.
++    val isV1 = repo.formatVersion == IndexFormatVersion.ONE
+     return if (uri.scheme == SCHEME_FILE) {
+       LocalFileDownloader(uri, indexFile, destFile)
+-    } else if (v1OrUnknown) {
++    } else if (isV1) {
+       @Suppress("DEPRECATION") // v1 only
+       HttpDownloader(httpManager, request, destFile)
+     } else {
