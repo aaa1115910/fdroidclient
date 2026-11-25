@@ -12,6 +12,8 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+      # CI-only changes do not need a new APK
+      - '.github/**'
   workflow_dispatch:
 
 concurrency:
@@ -20,6 +22,12 @@ concurrency:
 
 permissions:
   contents: write
+
+env:
+  # Upstream tracks its screenshot-test references (and fastlane images) in Git LFS, but a public
+  # fork cannot store new LFS objects, so smudging would fail on any newly added one. The build
+  # never reads those files - keep the pointer files and carry on.
+  GIT_LFS_SKIP_SMUDGE: '1'
 
 jobs:
   build:

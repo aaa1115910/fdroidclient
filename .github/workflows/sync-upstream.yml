@@ -6,6 +6,15 @@ name: sync-upstream
 # Because `master` never contains commits of its own, it is always a fast forward of upstream and
 # GitHub's "Sync fork" button keeps working. Because `shizuku` only ever *adds* files, merging the
 # mirror into it is practically conflict free.
+#
+# Git LFS: upstream tracks the screenshot-test references and the fastlane images in LFS. A public
+# fork may not upload new LFS objects ("batch response: ... can not upload new objects to public
+# fork"), so those objects can never be stored here and `git checkout` would fail with
+# "smudge filter lfs failed" as soon as upstream adds or changes one. We therefore never smudge
+# (GIT_LFS_SKIP_SMUDGE, so the pointer files stay in the working tree) and push with --no-verify,
+# because the git-lfs pre-push hook would try to upload the missing objects and fail the push.
+# Nothing in the build reads those files (they are screenshot-test references / store metadata) and
+# merges compare blobs, not file contents, so the pointers are harmless.
 
 on:
   schedule:
@@ -20,6 +29,10 @@ concurrency:
 permissions:
   contents: write
   issues: write
+
+env:
+  # Keep LFS pointers in the working tree instead of failing when an object is missing.
+  GIT_LFS_SKIP_SMUDGE: '1'
 
 jobs:
   sync:
@@ -39,7 +52,7 @@ jobs:
           git remote add upstream https://gitlab.com/fdroid/fdroidclient.git 2>/dev/null || true
           git fetch --no-tags --prune upstream master
           git checkout -B master FETCH_HEAD
-          git push origin master --force
+          git push --no-verify --force origin master
           echo "upstream_sha=$(git rev-parse --short FETCH_HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Merge the mirror into shizuku
@@ -58,31 +71,49 @@ jobs:
 
       - name: Push shizuku
         if: steps.merge.outputs.changed == 'true'
-        run: git push origin shizuku
+        run: git push --no-verify origin shizuku
 
-      - name: Open issue when the merge fails
+      - name: Report sync failure
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
             const date = new Date().toISOString().slice(0, 10);
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `上游同步失败 ${date}`,
-              labels: ['sync'],
-              body: [
-                '自动合并 `master`（上游镜像）到 `shizuku` 失败了，需要手动处理：',
-                '',
-                '```bash',
-                'git fetch origin',
-                'git switch shizuku',
-                'git merge origin/master',
-                '# 解决冲突后',
-                'git push origin shizuku',
-                '```',
-                '',
-                '冲突通常只会来自 `patches/`、`.github/` 这类本仓库新增的文件。',
-                '如果合并没问题但构建失败，多半是补丁打不上，见 `build-release` 那次构建的日志。',
-              ].join('\n'),
-            });
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '自动同步上游失败了，需要手动处理：',
+              '',
+              '```bash',
+              'git fetch origin',
+              'git switch shizuku',
+              'git merge origin/master',
+              '# 解决冲突后',
+              'git push origin shizuku',
+              '```',
+              '',
+              '冲突通常只会来自 `patches/`、`.github/` 这类本仓库新增的文件。',
+              '如果合并没问题但构建失败，多半是补丁打不上，见 `build-release` 那次构建的日志。',
+              '',
+              `运行日志：${runUrl}`,
+            ].join('\n');
+
+            await core.summary.addHeading('上游同步失败', 3).addLink(runUrl, runUrl).write();
+
+            // 这个仓库关闭了 Issues（创建 issue 会返回 410），所以只在真的能用时才建，
+            // 并且任何失败都只警告，不要因为通知本身把 job 再弄挂一次。
+            try {
+              const { data: repo } = await github.rest.repos.get(context.repo);
+              if (!repo.has_issues) {
+                core.warning('Issues 已关闭，失败详情只写进了 job summary。');
+                return;
+              }
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `上游同步失败 ${date}`,
+                labels: ['sync'],
+                body,
+              });
+            } catch (error) {
+              core.warning(`创建 issue 失败：${error.status ?? ''} ${error.message}`);
+            }
