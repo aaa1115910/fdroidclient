@@ -12,8 +12,9 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      # CI-only changes do not need a new APK
+      # CI / Git LFS plumbing only, neither can change the APK
       - '.github/**'
+      - '.lfsconfig'
   workflow_dispatch:
 
 concurrency:

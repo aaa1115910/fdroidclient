@@ -1,0 +1,7 @@
+# GitHub does not let a public fork upload new Git LFS objects ("batch response: ... can not
+# upload new objects to public fork"), and upstream tracks its screenshot-test references and
+# fastlane images in LFS. Upstream still hosts every object, so read them from there: plain
+# `git clone` / `git lfs fetch` works again. CI skips smudging entirely (GIT_LFS_SKIP_SMUDGE),
+# and pushes must use --no-verify, see .github/workflows/sync-upstream.yml.
+[lfs]
+	url = https://gitlab.com/fdroid/fdroidclient.git/info/lfs
